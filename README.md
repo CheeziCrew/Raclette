@@ -1,5 +1,8 @@
 # raclette
 
+
+[cheezi_raclette](https://github.com/user-attachments/assets/7e7bf9fd-c561-4f9a-a1c4-c8398100abc6)
+
 Multi-repo toolkit for dept44 microservices. Format, verify, scan dependencies, swap artifacts, and update OpenAPI specs — all from a single TUI.
 
 ## Install
@@ -59,3 +62,4 @@ Pick a command, select target repos, fill in any prompts, and let it rip. Maven 
 ## License
 
 [MIT](LICENSE)
+
