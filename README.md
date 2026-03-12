@@ -5,6 +5,15 @@
 
 Multi-repo toolkit for dept44 microservices. Format, verify, scan dependencies, swap artifacts, and update OpenAPI specs — all from a single TUI.
 
+## Status
+
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=CheeziCrew_Raclette&metric=alert_status)](https://sonarcloud.io/summary/overall?id=CheeziCrew_Raclette)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=CheeziCrew_Raclette&metric=reliability_rating)](https://sonarcloud.io/summary/overall?id=CheeziCrew_Raclette)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=CheeziCrew_Raclette&metric=security_rating)](https://sonarcloud.io/summary/overall?id=CheeziCrew_Raclette)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=CheeziCrew_Raclette&metric=sqale_rating)](https://sonarcloud.io/summary/overall?id=CheeziCrew_Raclette)
+[![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=CheeziCrew_Raclette&metric=vulnerabilities)](https://sonarcloud.io/summary/overall?id=CheeziCrew_Raclette)
+[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=CheeziCrew_Raclette&metric=bugs)](https://sonarcloud.io/summary/overall?id=CheeziCrew_Raclette)
+
 ## Install
 
 ```bash
