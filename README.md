@@ -1,4 +1,4 @@
-# raclette
+# Raclette
 
 
 ![cheezi_raclette](https://github.com/user-attachments/assets/7e7bf9fd-c561-4f9a-a1c4-c8398100abc6)
@@ -62,5 +62,6 @@ Pick a command, select target repos, fill in any prompts, and let it rip. Maven 
 ## License
 
 [MIT](LICENSE)
+
 
 
