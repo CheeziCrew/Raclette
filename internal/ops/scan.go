@@ -26,55 +26,66 @@ func FindDependency(dirs []string, query string) []DepMatch {
 	query = strings.ToLower(query)
 	var matches []DepMatch
 
-	// Regex to match <dependency> blocks in pom.xml
 	depRegex := regexp.MustCompile(`(?s)<dependency>\s*<groupId>([^<]+)</groupId>\s*<artifactId>([^<]+)</artifactId>(?:\s*<version>([^<]*)</version>)?`)
-	// Also match parent
 	parentRegex := regexp.MustCompile(`(?s)<parent>\s*<groupId>([^<]+)</groupId>\s*<artifactId>([^<]+)</artifactId>\s*<version>([^<]*)</version>`)
 
 	for _, dir := range dirs {
-		data, err := os.ReadFile(filepath.Join(dir, "pom.xml"))
-		if err != nil {
-			continue
-		}
-		content := string(data)
-		repo := filepath.Base(dir)
-		props := parsePomProperties(content)
-
-		// Check parent
-		if pm := parentRegex.FindStringSubmatch(content); len(pm) > 3 {
-			if matchesQuery(pm[1], pm[2], query) {
-				matches = append(matches, DepMatch{
-					Repo:     repo,
-					GroupID:  pm[1],
-					Artifact: pm[2],
-					Version:  resolveProperty(pm[3], props),
-					InParent: true,
-				})
-			}
-		}
-
-		// Check dependencies
-		for _, dm := range depRegex.FindAllStringSubmatch(content, -1) {
-			if len(dm) < 3 {
-				continue
-			}
-			groupID := dm[1]
-			artifactID := dm[2]
-			version := ""
-			if len(dm) > 3 {
-				version = resolveProperty(dm[3], props)
-			}
-			if matchesQuery(groupID, artifactID, query) {
-				matches = append(matches, DepMatch{
-					Repo:     repo,
-					GroupID:  groupID,
-					Artifact: artifactID,
-					Version:  version,
-				})
-			}
-		}
+		matches = append(matches, findDepsInRepo(dir, query, depRegex, parentRegex)...)
 	}
 
+	return matches
+}
+
+func findDepsInRepo(dir, query string, depRegex, parentRegex *regexp.Regexp) []DepMatch {
+	data, err := os.ReadFile(filepath.Join(dir, "pom.xml"))
+	if err != nil {
+		return nil
+	}
+	content := string(data)
+	repo := filepath.Base(dir)
+	props := parsePomProperties(content)
+
+	var matches []DepMatch
+	matches = append(matches, findParentMatch(content, repo, query, props, parentRegex)...)
+	matches = append(matches, findDepMatches(content, repo, query, props, depRegex)...)
+	return matches
+}
+
+func findParentMatch(content, repo, query string, props map[string]string, parentRegex *regexp.Regexp) []DepMatch {
+	pm := parentRegex.FindStringSubmatch(content)
+	if len(pm) <= 3 || !matchesQuery(pm[1], pm[2], query) {
+		return nil
+	}
+	return []DepMatch{{
+		Repo:     repo,
+		GroupID:  pm[1],
+		Artifact: pm[2],
+		Version:  resolveProperty(pm[3], props),
+		InParent: true,
+	}}
+}
+
+func findDepMatches(content, repo, query string, props map[string]string, depRegex *regexp.Regexp) []DepMatch {
+	var matches []DepMatch
+	for _, dm := range depRegex.FindAllStringSubmatch(content, -1) {
+		if len(dm) < 3 {
+			continue
+		}
+		groupID := dm[1]
+		artifactID := dm[2]
+		version := ""
+		if len(dm) > 3 {
+			version = resolveProperty(dm[3], props)
+		}
+		if matchesQuery(groupID, artifactID, query) {
+			matches = append(matches, DepMatch{
+				Repo:     repo,
+				GroupID:  groupID,
+				Artifact: artifactID,
+				Version:  version,
+			})
+		}
+	}
 	return matches
 }
 
@@ -221,71 +232,89 @@ var (
 // scanRepo walks src/main/java looking for CLIENT_ID and INTEGRATION_NAME
 // constants in integration packages — discovering real integration points
 // from source code rather than relying on spec filenames.
+type scanState struct {
+	base         string
+	allPackages  map[string]bool
+	resolvedPkgs map[string]bool
+	seen         map[string]bool
+	integrations []integration
+}
+
 func scanRepo(repoPath string) []integration {
-	integrationBase := filepath.Join(repoPath, "src", "main", "java")
+	st := &scanState{
+		base:         filepath.Join(repoPath, "src", "main", "java"),
+		allPackages:  make(map[string]bool),
+		resolvedPkgs: make(map[string]bool),
+		seen:         make(map[string]bool),
+	}
 
-	allPackages := make(map[string]bool)
-	resolvedPkgs := make(map[string]bool)
-	seen := make(map[string]bool)
-	var integrations []integration
+	filepath.Walk(st.base, st.walkFile)
+	st.addUnresolvedPackages()
 
-	filepath.Walk(integrationBase, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".java") {
-			return nil
-		}
-
-		rel, _ := filepath.Rel(integrationBase, path)
-		if !strings.Contains(rel, "integration") {
-			return nil
-		}
-
-		parts := strings.Split(rel, string(filepath.Separator))
-		for _, p := range parts {
-			if p == "db" {
-				return nil
-			}
-		}
-
-		pkg := extractPackageName(rel)
-		if pkg != "" && !strings.HasSuffix(pkg, ".java") {
-			allPackages[pkg] = true
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		content := string(data)
-
-		if matches := clientIDRe.FindStringSubmatch(content); len(matches) > 1 {
-			addIntegration(&integrations, seen, matches[1])
-			if pkg != "" {
-				resolvedPkgs[pkg] = true
-			}
-		}
-
-		if matches := integrationNameRe.FindStringSubmatch(content); len(matches) > 1 {
-			addIntegration(&integrations, seen, matches[1])
-			if pkg != "" {
-				resolvedPkgs[pkg] = true
-			}
-		}
-
-		return nil
+	sort.Slice(st.integrations, func(i, j int) bool {
+		return st.integrations[i].clientID < st.integrations[j].clientID
 	})
 
-	for pkg := range allPackages {
-		if !resolvedPkgs[pkg] && !seen[pkg] {
-			seen[pkg] = true
-			integrations = append(integrations, integration{clientID: pkg})
+	return st.integrations
+}
+
+func (st *scanState) walkFile(path string, info os.FileInfo, err error) error {
+	if err != nil || info.IsDir() || !strings.HasSuffix(path, ".java") {
+		return nil
+	}
+
+	rel, _ := filepath.Rel(st.base, path)
+	if !strings.Contains(rel, "integration") || containsDBSegment(rel) {
+		return nil
+	}
+
+	pkg := extractPackageName(rel)
+	if pkg != "" && !strings.HasSuffix(pkg, ".java") {
+		st.allPackages[pkg] = true
+	}
+
+	st.extractIntegrationsFromFile(path, pkg)
+	return nil
+}
+
+func containsDBSegment(rel string) bool {
+	for _, p := range strings.Split(rel, string(filepath.Separator)) {
+		if p == "db" {
+			return true
+		}
+	}
+	return false
+}
+
+func (st *scanState) extractIntegrationsFromFile(path, pkg string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	content := string(data)
+
+	if matches := clientIDRe.FindStringSubmatch(content); len(matches) > 1 {
+		addIntegration(&st.integrations, st.seen, matches[1])
+		if pkg != "" {
+			st.resolvedPkgs[pkg] = true
 		}
 	}
 
-	sort.Slice(integrations, func(i, j int) bool {
-		return integrations[i].clientID < integrations[j].clientID
-	})
+	if matches := integrationNameRe.FindStringSubmatch(content); len(matches) > 1 {
+		addIntegration(&st.integrations, st.seen, matches[1])
+		if pkg != "" {
+			st.resolvedPkgs[pkg] = true
+		}
+	}
+}
 
-	return integrations
+func (st *scanState) addUnresolvedPackages() {
+	for pkg := range st.allPackages {
+		if !st.resolvedPkgs[pkg] && !st.seen[pkg] {
+			st.seen[pkg] = true
+			st.integrations = append(st.integrations, integration{clientID: pkg})
+		}
+	}
 }
 
 func extractPackageName(relPath string) string {
@@ -392,10 +421,18 @@ type StaleIntegration struct {
 // match spec versions via pom.xml inputSpec entries, and compare against
 // target service POM versions.
 func ScanStaleIntegrations(dirs []string) []StaleIntegration {
-	// Phase 1: build version index from pom.xml <version> and a NameIndex.
-	svcVersions := make(map[string]string) // canonical name → POM version
-	var svcNames []string
+	svcVersions, idx := buildServiceIndex(dirs)
 
+	var stale []StaleIntegration
+	for _, dir := range dirs {
+		stale = append(stale, scanRepoForStale(dir, svcVersions, idx)...)
+	}
+	return stale
+}
+
+func buildServiceIndex(dirs []string) (map[string]string, *NameIndex) {
+	svcVersions := make(map[string]string)
+	var svcNames []string
 	for _, dir := range dirs {
 		name := serviceNameFromDir(dir)
 		ver := PomVersion(dir)
@@ -405,67 +442,63 @@ func ScanStaleIntegrations(dirs []string) []StaleIntegration {
 		svcVersions[name] = ver
 		svcNames = append(svcNames, name)
 	}
+	return svcVersions, NewNameIndex(svcNames)
+}
 
-	idx := NewNameIndex(svcNames)
+func scanRepoForStale(dir string, svcVersions map[string]string, idx *NameIndex) []StaleIntegration {
+	repo := filepath.Base(dir)
+	integrations := scanRepo(dir)
+	if len(integrations) == 0 {
+		return nil
+	}
 
-	// Phase 2: for each repo, discover integrations from source and find stale ones.
-	var stale []StaleIntegration
+	matchSpecVersions(dir, integrations)
+	normalizeClientIDs(integrations, idx)
+	return findStaleInRepo(dir, repo, integrations, svcVersions, idx)
+}
 
-	for _, dir := range dirs {
-		repo := filepath.Base(dir)
-
-		// Discover integrations from Java source code.
-		integrations := scanRepo(dir)
-		if len(integrations) == 0 {
+func normalizeClientIDs(integrations []integration, idx *NameIndex) {
+	for i := range integrations {
+		if idx.Resolve(integrations[i].clientID) != "" {
 			continue
 		}
-
-		// Populate spec versions from pom.xml inputSpec entries.
-		matchSpecVersions(dir, integrations)
-
-		// Normalize CLIENT_IDs — try trimming common suffixes.
-		for i := range integrations {
-			if idx.Resolve(integrations[i].clientID) == "" {
-				lower := strings.ToLower(integrations[i].clientID)
-				for _, suffix := range []string{"client", "integration", "service"} {
-					trimmed := strings.TrimSuffix(lower, suffix)
-					if trimmed != lower {
-						if resolved := idx.Resolve(trimmed); resolved != "" {
-							integrations[i].clientID = resolved
-							break
-						}
-					}
+		lower := strings.ToLower(integrations[i].clientID)
+		for _, suffix := range []string{"client", "integration", "service"} {
+			trimmed := strings.TrimSuffix(lower, suffix)
+			if trimmed != lower {
+				if resolved := idx.Resolve(trimmed); resolved != "" {
+					integrations[i].clientID = resolved
+					break
 				}
 			}
 		}
-
-		// Compare each integration's spec version against the target service's POM version.
-		for _, integ := range integrations {
-			if integ.specVersion == "" {
-				continue
-			}
-			targetName := idx.Resolve(integ.clientID)
-			if targetName == "" {
-				continue
-			}
-			targetVersion, ok := svcVersions[targetName]
-			if !ok || targetVersion == "" {
-				continue
-			}
-			if integ.specVersion != targetVersion {
-				stale = append(stale, StaleIntegration{
-					RepoDir:       dir,
-					Repo:          repo,
-					SpecFile:      integ.specFile,
-					SpecPath:      integ.specPath,
-					SpecVersion:   integ.specVersion,
-					TargetName:    targetName,
-					TargetVersion: targetVersion,
-				})
-			}
-		}
 	}
+}
 
+func findStaleInRepo(dir, repo string, integrations []integration, svcVersions map[string]string, idx *NameIndex) []StaleIntegration {
+	var stale []StaleIntegration
+	for _, integ := range integrations {
+		if integ.specVersion == "" {
+			continue
+		}
+		targetName := idx.Resolve(integ.clientID)
+		if targetName == "" {
+			continue
+		}
+		targetVersion := svcVersions[targetName]
+		if targetVersion == "" || integ.specVersion == targetVersion {
+			continue
+		}
+		stale = append(stale, StaleIntegration{
+			RepoDir:       dir,
+			Repo:          repo,
+			SpecFile:      integ.specFile,
+			SpecPath:      integ.specPath,
+			SpecVersion:   integ.specVersion,
+			TargetName:    targetName,
+			TargetVersion: targetVersion,
+		})
+	}
 	return stale
 }
 

@@ -110,7 +110,7 @@ func parseTargetPath(content string) string {
 // e.g. "classpath:/api/openapi.yaml" → "src/integration-test/resources/api/openapi.yaml"
 var classpathRe = regexp.MustCompile(`@Value\s*\(\s*"classpath:/?([^"]+)"\s*\)`)
 
-func parseResourcePath(content string, repoDir string) string {
+func parseResourcePath(content, repoDir string) string {
 	if m := classpathRe.FindStringSubmatch(content); len(m) > 1 {
 		roots := []string{
 			filepath.Join("src", "integration-test", "resources"),

@@ -39,66 +39,64 @@ func ReplaceDependencyVersion(dirs []string, groupID, artifactID, newVersion str
 // SwapDependency replaces one dependency with another (different groupId/artifactId/version).
 // Preserves <scope> and <exclusions> blocks from the original dependency.
 func SwapDependency(dirs []string, oldGroupID, oldArtifactID, newGroupID, newArtifactID, newVersion string) []Result {
-	// Match the entire <dependency>…</dependency> block for the old artifact.
-	// Use a greedy-enough pattern that captures everything between the tags,
-	// including scope, exclusions, optional, etc.
 	pattern := fmt.Sprintf(
 		`(?s)<dependency>\s*<groupId>%s</groupId>\s*<artifactId>%s</artifactId>(.*?)</dependency>`,
 		regexp.QuoteMeta(oldGroupID), regexp.QuoteMeta(oldArtifactID),
 	)
 	re := regexp.MustCompile(pattern)
 
-	// Regexes to extract preserved elements from the captured inner content.
 	scopeRe := regexp.MustCompile(`(?s)<scope>[^<]*</scope>`)
 	exclusionsRe := regexp.MustCompile(`(?s)<exclusions>.*?</exclusions>`)
 
 	var results []Result
 	for _, dir := range dirs {
-		repo := filepath.Base(dir)
-		pomPath := filepath.Join(dir, "pom.xml")
-
-		data, err := os.ReadFile(pomPath)
-		if err != nil {
-			results = append(results, Result{Repo: repo, Err: fmt.Errorf("read pom.xml: %w", err)})
-			continue
-		}
-
-		content := string(data)
-		if !re.MatchString(content) {
-			results = append(results, Result{Repo: repo, Message: "dependency not found"})
-			continue
-		}
-
-		updated := re.ReplaceAllStringFunc(content, func(match string) string {
-			inner := re.FindStringSubmatch(match)
-			tail := ""
-			if len(inner) > 1 {
-				// Preserve scope if present.
-				if s := scopeRe.FindString(inner[1]); s != "" {
-					tail += "\n\t\t\t" + s
-				}
-				// Preserve exclusions if present.
-				if e := exclusionsRe.FindString(inner[1]); e != "" {
-					tail += "\n\t\t\t" + e
-				}
-			}
-			return fmt.Sprintf("<dependency>\n\t\t\t<groupId>%s</groupId>\n\t\t\t<artifactId>%s</artifactId>\n\t\t\t<version>%s</version>%s\n\t\t</dependency>",
-				newGroupID, newArtifactID, newVersion, tail)
-		})
-
-		if updated == content {
-			results = append(results, Result{Repo: repo, Message: "no change needed"})
-			continue
-		}
-
-		if err := os.WriteFile(pomPath, []byte(updated), 0644); err != nil {
-			results = append(results, Result{Repo: repo, Err: fmt.Errorf("write pom.xml: %w", err)})
-			continue
-		}
-
-		results = append(results, Result{Repo: repo, Changed: true, Message: "dependency swapped"})
+		results = append(results, swapDepInRepo(dir, re, scopeRe, exclusionsRe, newGroupID, newArtifactID, newVersion))
 	}
 	return results
+}
+
+func swapDepInRepo(dir string, re, scopeRe, exclusionsRe *regexp.Regexp, newGroupID, newArtifactID, newVersion string) Result {
+	repo := filepath.Base(dir)
+	pomPath := filepath.Join(dir, "pom.xml")
+
+	data, err := os.ReadFile(pomPath)
+	if err != nil {
+		return Result{Repo: repo, Err: fmt.Errorf("read pom.xml: %w", err)}
+	}
+
+	content := string(data)
+	if !re.MatchString(content) {
+		return Result{Repo: repo, Message: "dependency not found"}
+	}
+
+	updated := re.ReplaceAllStringFunc(content, func(match string) string {
+		return buildSwappedDep(re, scopeRe, exclusionsRe, match, newGroupID, newArtifactID, newVersion)
+	})
+
+	if updated == content {
+		return Result{Repo: repo, Message: "no change needed"}
+	}
+
+	if err := os.WriteFile(pomPath, []byte(updated), 0644); err != nil {
+		return Result{Repo: repo, Err: fmt.Errorf("write pom.xml: %w", err)}
+	}
+
+	return Result{Repo: repo, Changed: true, Message: "dependency swapped"}
+}
+
+func buildSwappedDep(re, scopeRe, exclusionsRe *regexp.Regexp, match, newGroupID, newArtifactID, newVersion string) string {
+	inner := re.FindStringSubmatch(match)
+	tail := ""
+	if len(inner) > 1 {
+		if s := scopeRe.FindString(inner[1]); s != "" {
+			tail += "\n\t\t\t" + s
+		}
+		if e := exclusionsRe.FindString(inner[1]); e != "" {
+			tail += "\n\t\t\t" + e
+		}
+	}
+	return fmt.Sprintf("<dependency>\n\t\t\t<groupId>%s</groupId>\n\t\t\t<artifactId>%s</artifactId>\n\t\t\t<version>%s</version>%s\n\t\t</dependency>",
+		newGroupID, newArtifactID, newVersion, tail)
 }
 
 // ── Bump Parent Version ─────────────────────────────────────────────
@@ -123,12 +121,33 @@ func BumpParentVersion(dirs []string, newVersion string) []Result {
 // then copies the source spec if its version matches PomVersion (i.e. it's
 // been regenerated). If the source spec is also stale, reports that the
 // target service needs "Update Own Specs" first.
+// svcEntry holds a service's own spec path and POM version.
+type svcEntry struct {
+	specPath   string
+	pomVersion string
+}
+
 func UpdateIntegrationSpecs(dirs []string) []Result {
-	// Build source spec index: for each service, find its own spec file.
-	type svcEntry struct {
-		specPath   string // path to own spec file (may be "")
-		pomVersion string // from pom.xml <version>
+	svcIndex := buildSvcIndex(dirs)
+	staleList := ScanStaleIntegrations(dirs)
+	byRepo, repoOrder := groupStaleByRepo(staleList)
+
+	var results []Result
+	for _, repo := range repoOrder {
+		if r, ok := updateRepoSpecs(repo, byRepo[repo], svcIndex); ok {
+			results = append(results, r)
+		}
 	}
+
+	if len(results) == 0 {
+		results = append(results, Result{
+			Message: "All integration specs are already up to date.",
+		})
+	}
+	return results
+}
+
+func buildSvcIndex(dirs []string) map[string]svcEntry {
 	svcIndex := make(map[string]svcEntry)
 	for _, dir := range dirs {
 		name := serviceNameFromDir(dir)
@@ -142,93 +161,87 @@ func UpdateIntegrationSpecs(dirs []string) []Result {
 		}
 		svcIndex[name] = entry
 	}
+	return svcIndex
+}
 
-	// Use shared scanner to find all stale integrations.
-	staleList := ScanStaleIntegrations(dirs)
-
-	// Group stale integrations by repo for reporting.
-	type repoStale struct {
-		items []StaleIntegration
-	}
-	byRepo := make(map[string]*repoStale)
+func groupStaleByRepo(staleList []StaleIntegration) (map[string][]StaleIntegration, []string) {
+	byRepo := make(map[string][]StaleIntegration)
 	var repoOrder []string
 	for _, s := range staleList {
-		rs, ok := byRepo[s.Repo]
-		if !ok {
-			rs = &repoStale{}
-			byRepo[s.Repo] = rs
+		if _, ok := byRepo[s.Repo]; !ok {
 			repoOrder = append(repoOrder, s.Repo)
 		}
-		rs.items = append(rs.items, s)
+		byRepo[s.Repo] = append(byRepo[s.Repo], s)
 	}
+	return byRepo, repoOrder
+}
 
-	var results []Result
+func updateRepoSpecs(repo string, items []StaleIntegration, svcIndex map[string]svcEntry) (Result, bool) {
+	updated := 0
+	skipped := 0
+	var msgs []string
 
-	for _, repo := range repoOrder {
-		rs := byRepo[repo]
-		updated := 0
-		skipped := 0
-		var msgs []string
-
-		for _, s := range rs.items {
-			if s.SpecPath == "" {
-				skipped++
-				msgs = append(msgs, fmt.Sprintf("  ⚠ %s: no spec file path for %s", s.SpecFile, s.TargetName))
-				continue
-			}
-
-			svc, ok := svcIndex[s.TargetName]
-			if !ok || svc.pomVersion == "" {
-				continue
-			}
-
-			// Stale! Try to copy the source spec.
-			if svc.specPath == "" {
-				skipped++
-				msgs = append(msgs, fmt.Sprintf("  ⚠ %s: no source spec found for %s", s.SpecFile, s.TargetName))
-				continue
-			}
-
-			// Verify the source spec itself is current (has been regenerated).
-			sourceVersion := extractSpecVersion(svc.specPath)
-			if sourceVersion != svc.pomVersion {
-				skipped++
-				msgs = append(msgs, fmt.Sprintf("  ⚠ %s: source %s spec is stale (%s, need %s) — run 'Update Own Specs' on %s first",
-					s.SpecFile, s.TargetName, sourceVersion, svc.pomVersion, s.TargetName))
-				continue
-			}
-
-			sourceData, err := os.ReadFile(svc.specPath)
-			if err != nil {
-				msgs = append(msgs, fmt.Sprintf("  ✗ %s: failed to read source: %v", s.SpecFile, err))
-				continue
-			}
-
-			if err := os.WriteFile(s.SpecPath, sourceData, 0644); err != nil {
-				msgs = append(msgs, fmt.Sprintf("  ✗ %s: failed to write: %v", s.SpecFile, err))
-				continue
-			}
-
+	for _, s := range items {
+		msg, status := updateOneSpec(s, svcIndex)
+		if msg != "" {
+			msgs = append(msgs, msg)
+		}
+		switch status {
+		case specUpdated:
 			updated++
-			msgs = append(msgs, fmt.Sprintf("  ✓ %s: %s → %s", s.SpecFile, s.SpecVersion, svc.pomVersion))
-		}
-
-		if updated > 0 || skipped > 0 {
-			results = append(results, Result{
-				Repo:    repo,
-				Changed: updated > 0,
-				Message: fmt.Sprintf("Updated %d, skipped %d:\n%s", updated, skipped, strings.Join(msgs, "\n")),
-			})
+		case specSkipped:
+			skipped++
 		}
 	}
 
-	if len(results) == 0 {
-		results = append(results, Result{
-			Message: "All integration specs are already up to date.",
-		})
+	if updated == 0 && skipped == 0 {
+		return Result{}, false
+	}
+	return Result{
+		Repo:    repo,
+		Changed: updated > 0,
+		Message: fmt.Sprintf("Updated %d, skipped %d:\n%s", updated, skipped, strings.Join(msgs, "\n")),
+	}, true
+}
+
+type specUpdateStatus int
+
+const (
+	specIgnored specUpdateStatus = iota
+	specUpdated
+	specSkipped
+)
+
+func updateOneSpec(s StaleIntegration, svcIndex map[string]svcEntry) (string, specUpdateStatus) {
+	if s.SpecPath == "" {
+		return fmt.Sprintf("  ⚠ %s: no spec file path for %s", s.SpecFile, s.TargetName), specSkipped
 	}
 
-	return results
+	svc, ok := svcIndex[s.TargetName]
+	if !ok || svc.pomVersion == "" {
+		return "", specIgnored
+	}
+
+	if svc.specPath == "" {
+		return fmt.Sprintf("  ⚠ %s: no source spec found for %s", s.SpecFile, s.TargetName), specSkipped
+	}
+
+	sourceVersion := extractSpecVersion(svc.specPath)
+	if sourceVersion != svc.pomVersion {
+		return fmt.Sprintf("  ⚠ %s: source %s spec is stale (%s, need %s) — run 'Update Own Specs' on %s first",
+			s.SpecFile, s.TargetName, sourceVersion, svc.pomVersion, s.TargetName), specSkipped
+	}
+
+	sourceData, err := os.ReadFile(svc.specPath)
+	if err != nil {
+		return fmt.Sprintf("  ✗ %s: failed to read source: %v", s.SpecFile, err), specIgnored
+	}
+
+	if err := os.WriteFile(s.SpecPath, sourceData, 0644); err != nil {
+		return fmt.Sprintf("  ✗ %s: failed to write: %v", s.SpecFile, err), specIgnored
+	}
+
+	return fmt.Sprintf("  ✓ %s: %s → %s", s.SpecFile, s.SpecVersion, svc.pomVersion), specUpdated
 }
 
 // findOwnSpec locates a repo's own OpenAPI spec file.

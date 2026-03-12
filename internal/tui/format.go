@@ -62,11 +62,28 @@ func formatDepByDep(matches []ops.DepMatch) string {
 		return styles.ResultDim.Render("No matches found.")
 	}
 
-	// Group by groupId:artifactId.
-	type depGroup struct {
-		key     string
-		matches []ops.DepMatch
+	groups, order := groupMatchesByDep(matches)
+
+	var b strings.Builder
+	b.WriteString(depHeader(len(matches), "by dep"))
+
+	for i, key := range order {
+		g := groups[key]
+		writeDepGroup(&b, g)
+		if i < len(order)-1 {
+			b.WriteString("\n")
+		}
 	}
+
+	return b.String()
+}
+
+type depGroup struct {
+	key     string
+	matches []ops.DepMatch
+}
+
+func groupMatchesByDep(matches []ops.DepMatch) (map[string]*depGroup, []string) {
 	groups := make(map[string]*depGroup)
 	var order []string
 	for _, m := range matches {
@@ -79,40 +96,30 @@ func formatDepByDep(matches []ops.DepMatch) string {
 		}
 	}
 	sort.Strings(order)
+	return groups, order
+}
 
-	var b strings.Builder
-	b.WriteString(depHeader(len(matches), "by dep"))
+func writeDepGroup(b *strings.Builder, g *depGroup) {
+	b.WriteString(styles.AccentStyle.Render(g.key))
+	b.WriteString(styles.ResultDim.Render(fmt.Sprintf("  (%d)", len(g.matches))))
+	b.WriteString("\n")
 
-	for i, key := range order {
-		g := groups[key]
-		// Dep header.
-		b.WriteString(styles.AccentStyle.Render(key))
-		b.WriteString(styles.ResultDim.Render(fmt.Sprintf("  (%d)", len(g.matches))))
+	sort.Slice(g.matches, func(a, c int) bool {
+		return g.matches[a].Repo < g.matches[c].Repo
+	})
+	for _, m := range g.matches {
+		b.WriteString("    ")
+		b.WriteString(styles.NameStyle.Render(fmt.Sprintf("%-35s", m.Repo)))
+		if v := depVersion(m.Version); v != "" {
+			b.WriteString(" ")
+			b.WriteString(styles.ResultDim.Render(v))
+		}
+		if m.InParent {
+			b.WriteString(" ")
+			b.WriteString(styles.ResultAccent.Render("[parent]"))
+		}
 		b.WriteString("\n")
-
-		sort.Slice(g.matches, func(a, c int) bool {
-			return g.matches[a].Repo < g.matches[c].Repo
-		})
-		for _, m := range g.matches {
-			b.WriteString("    ")
-			b.WriteString(styles.NameStyle.Render(fmt.Sprintf("%-35s", m.Repo)))
-			if v := depVersion(m.Version); v != "" {
-				b.WriteString(" ")
-				b.WriteString(styles.ResultDim.Render(v))
-			}
-			if m.InParent {
-				b.WriteString(" ")
-				b.WriteString(styles.ResultAccent.Render("[parent]"))
-			}
-			b.WriteString("\n")
-		}
-
-		if i < len(order)-1 {
-			b.WriteString("\n")
-		}
 	}
-
-	return b.String()
 }
 
 func depHeader(count int, mode string) string {

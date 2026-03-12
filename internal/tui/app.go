@@ -53,8 +53,6 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -66,93 +64,96 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
-		// ctrl+c always exits.
-		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
-		}
-		// q navigates back; only quits from menu (like swissgit).
-		if msg.String() == "q" && m.current != screens.ScreenPrompt {
-			if m.current == screens.ScreenMenu {
-				return m, tea.Quit
-			}
-			m.current = screens.ScreenMenu
-			return m, nil
+		if cmd, handled := m.handleGlobalKey(msg); handled {
+			return m, cmd
 		}
 
-	// ── Menu selected a command ──────────────────────────────────
 	case curd.MenuSelectionMsg:
-		// Look up the maven command by name.
-		for _, cmd := range maven.Commands() {
-			if cmd.Name == msg.Command {
-				m.pendingCmd = cmd
-				m.pendingInputs = nil
-				base, _ := os.Getwd()
-				m.repoSelect = screens.NewRepoSelect(base, m.height, 3)
-				m.current = screens.ScreenRepoSelect
-				return m, m.repoSelect.Init()
-			}
-		}
+		return m.handleMenuSelection(msg)
 
-	// ── Repo select confirmed → prompts or execute ──────────────
 	case screens.RepoSelectDoneMsg:
-		if len(m.pendingCmd.Prompts) > 0 && m.pendingInputs == nil {
-			m.prompt = screens.NewPrompt(m.pendingCmd)
-			m.current = screens.ScreenPrompt
-			return m, m.prompt.Init()
-		}
-		return m, m.execute()
+		return m.handleRepoSelectDone()
 
 	case screens.NavigateMsg:
 		m.current = msg.Screen
 		return m, nil
 
-	// ── Prompt inputs collected → execute ────────────────────────
 	case screens.PromptDoneMsg:
 		m.pendingInputs = msg.Inputs
 		return m, m.execute()
 
-	// ── Back to menu ────────────────────────────────────────────
 	case screens.BackToMenuMsg:
 		m.current = screens.ScreenMenu
 		return m, nil
 
-	// ── Maven build finished for one repo ────────────────────────
 	case screens.MavenDoneMsg:
-		var cmd tea.Cmd
-		m.runner, cmd = m.runner.Update(msg)
-		cmds = append(cmds, cmd)
-
-		m.running--
-		m.completed++
-		cmds = append(cmds, m.drainQueue()...)
-
-		return m, tea.Batch(cmds...)
+		return m.handleMavenDone(msg)
 	}
 
-	// Delegate to current screen.
+	return m.delegateToScreen(msg)
+}
+
+func (m *Model) handleGlobalKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if msg.String() == "ctrl+c" {
+		return tea.Quit, true
+	}
+	if msg.String() == "q" && m.current != screens.ScreenPrompt {
+		if m.current == screens.ScreenMenu {
+			return tea.Quit, true
+		}
+		m.current = screens.ScreenMenu
+		return nil, true
+	}
+	return nil, false
+}
+
+func (m Model) handleMenuSelection(msg curd.MenuSelectionMsg) (tea.Model, tea.Cmd) {
+	for _, cmd := range maven.Commands() {
+		if cmd.Name == msg.Command {
+			m.pendingCmd = cmd
+			m.pendingInputs = nil
+			base, _ := os.Getwd()
+			m.repoSelect = screens.NewRepoSelect(base, m.height, 3)
+			m.current = screens.ScreenRepoSelect
+			return m, m.repoSelect.Init()
+		}
+	}
+	return m, nil
+}
+
+func (m Model) handleRepoSelectDone() (tea.Model, tea.Cmd) {
+	if len(m.pendingCmd.Prompts) > 0 && m.pendingInputs == nil {
+		m.prompt = screens.NewPrompt(m.pendingCmd)
+		m.current = screens.ScreenPrompt
+		return m, m.prompt.Init()
+	}
+	return m, m.execute()
+}
+
+func (m Model) handleMavenDone(msg screens.MavenDoneMsg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	var cmd tea.Cmd
+	m.runner, cmd = m.runner.Update(msg)
+	cmds = append(cmds, cmd)
+	m.running--
+	m.completed++
+	cmds = append(cmds, m.drainQueue()...)
+	return m, tea.Batch(cmds...)
+}
+
+func (m Model) delegateToScreen(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch m.current {
 	case screens.ScreenMenu:
-		var cmd tea.Cmd
 		m.menu, cmd = m.menu.Update(msg)
-		cmds = append(cmds, cmd)
-
 	case screens.ScreenRunner:
-		var cmd tea.Cmd
 		m.runner, cmd = m.runner.Update(msg)
-		cmds = append(cmds, cmd)
-
 	case screens.ScreenRepoSelect:
-		var cmd tea.Cmd
 		m.repoSelect, cmd = m.repoSelect.Update(msg)
-		cmds = append(cmds, cmd)
-
 	case screens.ScreenPrompt:
-		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(msg)
-		cmds = append(cmds, cmd)
 	}
-
-	return m, tea.Batch(cmds...)
+	return m, cmd
 }
 
 // execute runs the pending command based on its kind.

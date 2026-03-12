@@ -137,122 +137,149 @@ func tickCmd() tea.Cmd {
 }
 
 func (m RunnerModel) Update(msg tea.Msg) (RunnerModel, tea.Cmd) {
-	var cmds []tea.Cmd
-
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		w := msg.Width - 20
-		if w > 60 {
-			w = 60
-		}
-		if w < 20 {
-			w = 20
-		}
-		m.bar.SetWidth(w)
-		m.viewport.SetWidth(msg.Width - 4)
-		m.viewport.SetHeight(msg.Height - 8)
+		return m.handleResize(msg), nil
 
 	case tea.MouseWheelMsg:
-		if m.mode == modeText || (m.mode == modeMaven && m.done) {
-			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			cmds = append(cmds, cmd)
-		}
+		return m.handleMouseWheel(msg)
 
 	case tea.KeyPressMsg:
-		if isBack(msg) {
-			return m, func() tea.Msg { return BackToMenuMsg{} }
-		}
-		// Tab toggles between primary and alternate content.
-		if msg.String() == "tab" && m.altContent != "" && m.done {
-			m.showingAlt = !m.showingAlt
-			if m.showingAlt {
-				m.viewport.SetContent(m.altContent)
-			} else {
-				m.viewport.SetContent(m.content)
-			}
-			m.viewport.GotoTop()
-			return m, nil
-		}
-		if m.mode == modeText || (m.mode == modeMaven && m.done) {
-			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			cmds = append(cmds, cmd)
-		}
+		return m.handleKeyPress(msg)
 
 	case MavenDoneMsg:
-		// A single repo finished its maven build.
-		for i := range m.tasks {
-			if m.tasks[i].Path == msg.Path {
-				if msg.Err != nil {
-					m.tasks[i].Status = TaskFailed
-					m.tasks[i].Error = curd.TruncateError(msg.Err.Error(), m.width-10)
-				} else {
-					m.tasks[i].Status = TaskDone
-					m.tasks[i].Result = msg.Result
-				}
-				break
-			}
-		}
-
-		m.finished = 0
-		allDone := true
-		for _, t := range m.tasks {
-			switch t.Status {
-			case TaskDone, TaskFailed:
-				m.finished++
-			default:
-				allDone = false
-			}
-		}
-
-		if allDone {
-			m.done = true
-			m.elapsed = time.Since(m.start)
-			m.viewport.SetContent(m.viewResults())
-			m.viewport.GotoTop()
-			return m, tea.Batch(
-				m.bar.SetPercent(1.0),
-				func() tea.Msg { return AllDoneMsg{} },
-			)
-		}
-
-		pct := float64(m.finished) / float64(len(m.tasks))
-		cmds = append(cmds, m.bar.SetPercent(pct))
+		return m.handleMavenDone(msg)
 
 	case TextOutputMsg:
-		// Scan/transform results.
-		m.content = strings.Join(msg.Lines, "\n")
-		m.altContent = msg.AltContent
-		m.showingAlt = false
-		m.viewport.SetContent(m.content)
-		m.viewport.GotoTop()
-		m.textDone = true
-		m.done = true
-		m.elapsed = time.Since(m.start)
+		return m.handleTextOutput(msg), nil
 
 	case progress.FrameMsg:
 		var cmd tea.Cmd
 		m.bar, cmd = m.bar.Update(msg)
-		cmds = append(cmds, cmd)
+		return m, cmd
 
 	case tickMsg:
 		if !m.done {
 			m.elapsed = time.Since(m.start)
-			cmds = append(cmds, tickCmd())
+			return m, tickCmd()
 		}
 
 	case spinner.TickMsg:
 		if !m.done {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
-			cmds = append(cmds, cmd)
+			return m, cmd
 		}
 	}
 
-	return m, tea.Batch(cmds...)
+	return m, nil
+}
+
+func (m RunnerModel) handleResize(msg tea.WindowSizeMsg) RunnerModel {
+	m.width = msg.Width
+	m.height = msg.Height
+	w := msg.Width - 20
+	if w > 60 {
+		w = 60
+	}
+	if w < 20 {
+		w = 20
+	}
+	m.bar.SetWidth(w)
+	m.viewport.SetWidth(msg.Width - 4)
+	m.viewport.SetHeight(msg.Height - 8)
+	return m
+}
+
+func (m RunnerModel) isViewportActive() bool {
+	return m.mode == modeText || (m.mode == modeMaven && m.done)
+}
+
+func (m RunnerModel) handleMouseWheel(msg tea.MouseWheelMsg) (RunnerModel, tea.Cmd) {
+	if m.isViewportActive() {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m RunnerModel) handleKeyPress(msg tea.KeyPressMsg) (RunnerModel, tea.Cmd) {
+	if isBack(msg) {
+		return m, func() tea.Msg { return BackToMenuMsg{} }
+	}
+	if msg.String() == "tab" && m.altContent != "" && m.done {
+		m.showingAlt = !m.showingAlt
+		if m.showingAlt {
+			m.viewport.SetContent(m.altContent)
+		} else {
+			m.viewport.SetContent(m.content)
+		}
+		m.viewport.GotoTop()
+		return m, nil
+	}
+	if m.isViewportActive() {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m RunnerModel) handleMavenDone(msg MavenDoneMsg) (RunnerModel, tea.Cmd) {
+	m.applyTaskResult(msg)
+
+	m.finished = 0
+	allDone := true
+	for _, t := range m.tasks {
+		switch t.Status {
+		case TaskDone, TaskFailed:
+			m.finished++
+		default:
+			allDone = false
+		}
+	}
+
+	if allDone {
+		m.done = true
+		m.elapsed = time.Since(m.start)
+		m.viewport.SetContent(m.viewResults())
+		m.viewport.GotoTop()
+		return m, tea.Batch(
+			m.bar.SetPercent(1.0),
+			func() tea.Msg { return AllDoneMsg{} },
+		)
+	}
+
+	pct := float64(m.finished) / float64(len(m.tasks))
+	return m, m.bar.SetPercent(pct)
+}
+
+func (m *RunnerModel) applyTaskResult(msg MavenDoneMsg) {
+	for i := range m.tasks {
+		if m.tasks[i].Path == msg.Path {
+			if msg.Err != nil {
+				m.tasks[i].Status = TaskFailed
+				m.tasks[i].Error = curd.TruncateError(msg.Err.Error(), m.width-10)
+			} else {
+				m.tasks[i].Status = TaskDone
+				m.tasks[i].Result = msg.Result
+			}
+			break
+		}
+	}
+}
+
+func (m RunnerModel) handleTextOutput(msg TextOutputMsg) RunnerModel {
+	m.content = strings.Join(msg.Lines, "\n")
+	m.altContent = msg.AltContent
+	m.showingAlt = false
+	m.viewport.SetContent(m.content)
+	m.viewport.GotoTop()
+	m.textDone = true
+	m.done = true
+	m.elapsed = time.Since(m.start)
+	return m
 }
 
 func (m RunnerModel) View() string {
@@ -344,57 +371,65 @@ func (m RunnerModel) viewProgress() string {
 
 // viewResults shows the success/failure summary.
 func (m RunnerModel) viewResults() string {
-	var succeeded, failed int
-	var okTasks, failTasks []RepoTask
+	okTasks, failTasks := m.partitionTasks()
+
+	var s string
+	s += m.viewResultBanner(len(okTasks), len(failTasks))
+	s += m.viewFailures(failTasks)
+	s += m.viewSuccesses(okTasks)
+	return s
+}
+
+func (m RunnerModel) partitionTasks() (okTasks, failTasks []RepoTask) {
 	for _, t := range m.tasks {
 		switch t.Status {
 		case TaskDone:
-			succeeded++
 			okTasks = append(okTasks, t)
 		case TaskFailed:
-			failed++
 			failTasks = append(failTasks, t)
 		}
 	}
+	return
+}
 
-	var s string
-
-	// Summary banner.
+func (m RunnerModel) viewResultBanner(succeeded, failed int) string {
 	banner := m.styles.ResultAccent.Render(m.command.Name) + m.styles.ResultDim.Render("  ")
 	banner += m.styles.ResultOk.Render(fmt.Sprintf("✔ %d", succeeded))
 	if failed > 0 {
 		banner += m.styles.ResultDim.Render("  ") + m.styles.ResultFail.Render(fmt.Sprintf("✗ %d", failed))
 	}
-	s += m.styles.SummaryBox.Render(banner) + "\n\n"
+	return m.styles.SummaryBox.Render(banner) + "\n\n"
+}
 
-	// Failures first.
-	if len(failTasks) > 0 {
-		var failContent string
-		for _, t := range failTasks {
-			failContent += fmt.Sprintf("  %s %s\n", m.styles.ResultFail.Render("✗"), m.styles.NameStyle.Render(t.Name))
-			if t.Error != "" {
-				failContent += fmt.Sprintf("    %s\n", m.styles.ResultDim.Render(t.Error))
-			}
-		}
-		failContent = strings.TrimRight(failContent, "\n")
-		s += m.styles.FailBox.Render(failContent) + "\n\n"
+func (m RunnerModel) viewFailures(failTasks []RepoTask) string {
+	if len(failTasks) == 0 {
+		return ""
 	}
-
-	// Successes — compact list.
-	if len(okTasks) > 0 {
-		var okContent string
-		for _, t := range okTasks {
-			line := fmt.Sprintf("  %s %s", m.styles.ResultOk.Render("✔"), m.styles.NameStyle.Render(t.Name))
-			if t.Result != "" {
-				line += "  " + m.styles.ResultDim.Render(t.Result)
-			}
-			okContent += line + "\n"
+	var failContent string
+	for _, t := range failTasks {
+		failContent += fmt.Sprintf("  %s %s\n", m.styles.ResultFail.Render("✗"), m.styles.NameStyle.Render(t.Name))
+		if t.Error != "" {
+			failContent += fmt.Sprintf("    %s\n", m.styles.ResultDim.Render(t.Error))
 		}
-		okContent = strings.TrimRight(okContent, "\n")
-		s += m.styles.SuccessBox.Render(okContent) + "\n"
 	}
+	failContent = strings.TrimRight(failContent, "\n")
+	return m.styles.FailBox.Render(failContent) + "\n\n"
+}
 
-	return s
+func (m RunnerModel) viewSuccesses(okTasks []RepoTask) string {
+	if len(okTasks) == 0 {
+		return ""
+	}
+	var okContent string
+	for _, t := range okTasks {
+		line := fmt.Sprintf("  %s %s", m.styles.ResultOk.Render("✔"), m.styles.NameStyle.Render(t.Name))
+		if t.Result != "" {
+			line += "  " + m.styles.ResultDim.Render(t.Result)
+		}
+		okContent += line + "\n"
+	}
+	okContent = strings.TrimRight(okContent, "\n")
+	return m.styles.SuccessBox.Render(okContent) + "\n"
 }
 
 func (m RunnerModel) hasFailures() bool {
