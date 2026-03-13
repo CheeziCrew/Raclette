@@ -33,6 +33,12 @@ type PromptDoneMsg struct {
 // AllDoneMsg signals all commands are finished.
 type AllDoneMsg struct{}
 
+// SaveHistoryMsg tells the root model to persist a prompt value.
+type SaveHistoryMsg struct {
+	Category string
+	Value    string
+}
+
 // Re-export shared types.
 type BackToMenuMsg = curd.BackToMenuMsg
 type RepoSelectDoneMsg = curd.RepoSelectDoneMsg

@@ -13,6 +13,7 @@ type Result struct {
 	Repo    string
 	Changed bool
 	Message string
+	Diff    string // unified-style diff of pom.xml changes (if any)
 	Err     error
 }
 
@@ -81,7 +82,7 @@ func swapDepInRepo(dir string, re, scopeRe, exclusionsRe *regexp.Regexp, newGrou
 		return Result{Repo: repo, Err: fmt.Errorf("write pom.xml: %w", err)}
 	}
 
-	return Result{Repo: repo, Changed: true, Message: "dependency swapped"}
+	return Result{Repo: repo, Changed: true, Message: "dependency swapped", Diff: simpleDiff(repo, content, updated)}
 }
 
 func buildSwappedDep(re, scopeRe, exclusionsRe *regexp.Regexp, match, newGroupID, newArtifactID, newVersion string) string {
@@ -312,7 +313,94 @@ func replaceInPom(dir string, re *regexp.Regexp, newVersion string) Result {
 		return Result{Repo: repo, Err: fmt.Errorf("write pom.xml: %w", err)}
 	}
 
-	return Result{Repo: repo, Changed: true, Message: fmt.Sprintf("updated to %s", newVersion)}
+	return Result{Repo: repo, Changed: true, Message: fmt.Sprintf("updated to %s", newVersion), Diff: simpleDiff(repo, content, updated)}
+}
+
+// simpleDiff produces a compact diff showing only changed lines with context.
+func simpleDiff(repo, oldContent, newContent string) string {
+	oldLines := strings.Split(oldContent, "\n")
+	newLines := strings.Split(newContent, "\n")
+
+	var diff strings.Builder
+	diff.WriteString(fmt.Sprintf("--- %s/pom.xml\n+++ %s/pom.xml\n", repo, repo))
+
+	// Find changed regions: lines that differ.
+	maxLen := len(oldLines)
+	if len(newLines) > maxLen {
+		maxLen = len(newLines)
+	}
+
+	const contextLines = 2
+	type hunk struct{ start, end int }
+	var hunks []hunk
+
+	for i := 0; i < maxLen; i++ {
+		var ol, nl string
+		if i < len(oldLines) {
+			ol = oldLines[i]
+		}
+		if i < len(newLines) {
+			nl = newLines[i]
+		}
+		if ol != nl {
+			start := i - contextLines
+			if start < 0 {
+				start = 0
+			}
+			end := i + contextLines + 1
+			if end > maxLen {
+				end = maxLen
+			}
+			if len(hunks) > 0 && start <= hunks[len(hunks)-1].end {
+				hunks[len(hunks)-1].end = end
+			} else {
+				hunks = append(hunks, hunk{start, end})
+			}
+		}
+	}
+
+	for _, h := range hunks {
+		diff.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", h.start+1, h.end-h.start, h.start+1, h.end-h.start))
+		for i := h.start; i < h.end; i++ {
+			var ol, nl string
+			if i < len(oldLines) {
+				ol = oldLines[i]
+			}
+			if i < len(newLines) {
+				nl = newLines[i]
+			}
+			if ol != nl {
+				if ol != "" {
+					diff.WriteString("- " + ol + "\n")
+				}
+				if nl != "" {
+					diff.WriteString("+ " + nl + "\n")
+				}
+			} else {
+				if i < len(oldLines) {
+					diff.WriteString("  " + ol + "\n")
+				}
+			}
+		}
+	}
+
+	return diff.String()
+}
+
+// FormatDiffs collects all diffs from results into a single string for display.
+func FormatDiffs(results []Result) string {
+	var b strings.Builder
+	for _, r := range results {
+		if r.Diff != "" {
+			b.WriteString(r.Diff)
+			b.WriteString("\n")
+		}
+	}
+	s := b.String()
+	if s == "" {
+		return "No changes."
+	}
+	return s
 }
 
 // FormatResults formats transform results as lines for the TUI.

@@ -59,6 +59,12 @@ type RunnerModel struct {
 	altContent string // alternate view (toggle with tab)
 	showingAlt bool   // which view is active
 
+	// Build log viewer: cursor on failed tasks, log viewport overlay.
+	failedTasks []RepoTask
+	failCursor  int
+	logView     viewport.Model
+	showingLog  bool
+
 	start   time.Time
 	elapsed time.Duration
 	width   int
@@ -84,10 +90,13 @@ func NewRunner() RunnerModel {
 
 	styles := curd.RaclettePalette.Styles()
 
+	logVp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
+
 	return RunnerModel{
 		spinner:  s,
 		bar:      bar,
 		viewport: vp,
+		logView:  logVp,
 		styles:   styles,
 	}
 }
@@ -188,6 +197,8 @@ func (m RunnerModel) handleResize(msg tea.WindowSizeMsg) RunnerModel {
 	m.bar.SetWidth(w)
 	m.viewport.SetWidth(msg.Width - 4)
 	m.viewport.SetHeight(msg.Height - 8)
+	m.logView.SetWidth(msg.Width - 4)
+	m.logView.SetHeight(msg.Height - 8)
 	return m
 }
 
@@ -205,9 +216,22 @@ func (m RunnerModel) handleMouseWheel(msg tea.MouseWheelMsg) (RunnerModel, tea.C
 }
 
 func (m RunnerModel) handleKeyPress(msg tea.KeyPressMsg) (RunnerModel, tea.Cmd) {
+	// Log view: esc goes back to results.
+	if m.showingLog {
+		if isBack(msg) {
+			m.showingLog = false
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.logView, cmd = m.logView.Update(msg)
+		return m, cmd
+	}
+
 	if isBack(msg) {
 		return m, func() tea.Msg { return BackToMenuMsg{} }
 	}
+
+	// Tab toggle for alt content.
 	if msg.String() == "tab" && m.altContent != "" && m.done {
 		m.showingAlt = !m.showingAlt
 		if m.showingAlt {
@@ -218,6 +242,28 @@ func (m RunnerModel) handleKeyPress(msg tea.KeyPressMsg) (RunnerModel, tea.Cmd) 
 		m.viewport.GotoTop()
 		return m, nil
 	}
+
+	// Failed task cursor navigation + log viewer (only in maven done state).
+	if m.done && m.mode == modeMaven && len(m.failedTasks) > 0 {
+		switch msg.String() {
+		case "j", "down":
+			m.failCursor = (m.failCursor + 1) % len(m.failedTasks)
+			m.viewport.SetContent(m.viewResults())
+			return m, nil
+		case "k", "up":
+			m.failCursor = (m.failCursor - 1 + len(m.failedTasks)) % len(m.failedTasks)
+			m.viewport.SetContent(m.viewResults())
+			return m, nil
+		case "l":
+			task := m.failedTasks[m.failCursor]
+			content := readBuildLog(task.Name)
+			m.logView.SetContent(content)
+			m.logView.GotoTop()
+			m.showingLog = true
+			return m, nil
+		}
+	}
+
 	if m.isViewportActive() {
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -243,6 +289,13 @@ func (m RunnerModel) handleMavenDone(msg MavenDoneMsg) (RunnerModel, tea.Cmd) {
 	if allDone {
 		m.done = true
 		m.elapsed = time.Since(m.start)
+		m.failedTasks = nil
+		for _, t := range m.tasks {
+			if t.Status == TaskFailed {
+				m.failedTasks = append(m.failedTasks, t)
+			}
+		}
+		m.failCursor = 0
 		m.viewport.SetContent(m.viewResults())
 		m.viewport.GotoTop()
 		return m, tea.Batch(
@@ -285,6 +338,23 @@ func (m RunnerModel) handleTextOutput(msg TextOutputMsg) RunnerModel {
 func (m RunnerModel) View() string {
 	var b strings.Builder
 
+	// Log viewer overlay.
+	if m.showingLog {
+		if m.failCursor < len(m.failedTasks) {
+			task := m.failedTasks[m.failCursor]
+			b.WriteString(m.styles.Title.Render(fmt.Sprintf("📋 Build Log: %s", task.Name)))
+		} else {
+			b.WriteString(m.styles.Title.Render("📋 Build Log"))
+		}
+		b.WriteString("\n\n")
+		b.WriteString(m.logView.View())
+		b.WriteString("\n")
+		b.WriteString(curd.RenderHintBar(m.styles, []curd.Hint{
+			{Key: "esc", Desc: "back"},
+		}))
+		return b.String()
+	}
+
 	// Header: command name + status indicator.
 	header := fmt.Sprintf("%s %s", m.command.Icon, m.command.Name)
 	if m.done {
@@ -315,6 +385,12 @@ func (m RunnerModel) View() string {
 	}
 	if m.done && m.altContent != "" {
 		hints = append([]curd.Hint{{Key: "tab", Desc: "toggle view"}}, hints...)
+	}
+	if m.done && m.mode == modeMaven && len(m.failedTasks) > 0 {
+		hints = append([]curd.Hint{
+			{Key: "j/k", Desc: "move"},
+			{Key: "l", Desc: "log"},
+		}, hints...)
 	}
 	b.WriteString(curd.RenderHintBar(m.styles, hints))
 
@@ -406,8 +482,14 @@ func (m RunnerModel) viewFailures(failTasks []RepoTask) string {
 		return ""
 	}
 	var failContent string
-	for _, t := range failTasks {
-		failContent += fmt.Sprintf("  %s %s\n", m.styles.ResultFail.Render("✗"), m.styles.NameStyle.Render(t.Name))
+	for i, t := range failTasks {
+		prefix := "  "
+		nameStyle := m.styles.NameStyle
+		if len(m.failedTasks) > 0 && i == m.failCursor {
+			prefix = "▸ "
+			nameStyle = lipgloss.NewStyle().Bold(true).Foreground(curd.ColorBrYellow)
+		}
+		failContent += fmt.Sprintf("%s%s %s\n", prefix, m.styles.ResultFail.Render("✗"), nameStyle.Render(t.Name))
 		if t.Error != "" {
 			failContent += fmt.Sprintf("    %s\n", m.styles.ResultDim.Render(t.Error))
 		}
@@ -439,6 +521,20 @@ func (m RunnerModel) hasFailures() bool {
 		}
 	}
 	return false
+}
+
+// readBuildLog reads a build log from ~/.cache/raclette/logs/{repo}.log.
+func readBuildLog(repoName string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "Could not determine home directory."
+	}
+	logPath := filepath.Join(home, ".cache", "raclette", "logs", repoName+".log")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return fmt.Sprintf("No build log available for %s.", repoName)
+	}
+	return string(data)
 }
 
 // MarkRunning marks a task as running by its path.

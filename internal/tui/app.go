@@ -32,8 +32,9 @@ type Model struct {
 	completed int
 	total     int
 
-	width  int
-	height int
+	history *History
+	width   int
+	height  int
 }
 
 // New creates the root model.
@@ -42,6 +43,7 @@ func New() Model {
 		current: screens.ScreenMenu,
 		menu:    screens.NewMenu(),
 		runner:  screens.NewRunner(),
+		history: LoadHistory(),
 	}
 }
 
@@ -86,6 +88,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.current = screens.ScreenMenu
 		return m, nil
 
+	case screens.SaveHistoryMsg:
+		m.history.Add(msg.Category, msg.Value)
+		return m, nil
+
 	case screens.MavenDoneMsg:
 		return m.handleMavenDone(msg)
 	}
@@ -123,7 +129,7 @@ func (m Model) handleMenuSelection(msg curd.MenuSelectionMsg) (tea.Model, tea.Cm
 
 func (m Model) handleRepoSelectDone() (tea.Model, tea.Cmd) {
 	if len(m.pendingCmd.Prompts) > 0 && m.pendingInputs == nil {
-		m.prompt = screens.NewPrompt(m.pendingCmd)
+		m.prompt = screens.NewPromptWithHistory(m.pendingCmd, m.history.Messages)
 		m.current = screens.ScreenPrompt
 		return m, m.prompt.Init()
 	}
@@ -229,11 +235,12 @@ func (m *Model) executeTransform(dirs []string) tea.Cmd {
 	}
 
 	content := formatTransformResults(results)
+	altContent := ops.FormatDiffs(results)
 
 	return tea.Batch(
 		m.runner.Init(),
 		func() tea.Msg {
-			return screens.TextOutputMsg{Lines: []string{content}}
+			return screens.TextOutputMsg{Lines: []string{content}, AltContent: altContent}
 		},
 	)
 }

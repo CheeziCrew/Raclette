@@ -27,14 +27,31 @@ type PromptModel struct {
 	cursor  int
 	width   int
 	height  int
+
+	// History per prompt key — used for placeholder hints and cycling.
+	history map[string][]string
 }
 
 // NewPrompt creates a prompt screen for the given command's prompts.
 func NewPrompt(cmd maven.Command) PromptModel {
+	return NewPromptWithHistory(cmd, nil)
+}
+
+// NewPromptWithHistory creates a prompt screen pre-filled with history values.
+func NewPromptWithHistory(cmd maven.Command, history map[string][]string) PromptModel {
+	if history == nil {
+		history = make(map[string][]string)
+	}
+
 	var inputs []textinput.Model
 	for i, p := range cmd.Prompts {
-		ti := textinput.New()
-		ti.Placeholder = p.Placeholder
+		placeholder := p.Placeholder
+		histKey := cmd.Name + "/" + p.Key
+		if vals, ok := history[histKey]; ok && len(vals) > 0 {
+			placeholder = vals[0] + " (↑ history)"
+		}
+
+		ti := curd.NewStyledInput(placeholder, curd.RaclettePalette)
 		ti.CharLimit = 120
 		ti.SetWidth(50)
 		if i == 0 {
@@ -46,6 +63,7 @@ func NewPrompt(cmd maven.Command) PromptModel {
 	return PromptModel{
 		command: cmd,
 		inputs:  inputs,
+		history: history,
 	}
 }
 
@@ -76,6 +94,9 @@ func (m PromptModel) Update(msg tea.Msg) (PromptModel, tea.Cmd) {
 				m.cursor--
 				return m, m.inputs[m.cursor].Focus()
 			}
+		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+p"))):
+			m.cycleHistory()
+			return m, nil
 		case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
 			if m.cursor == len(m.inputs)-1 || len(m.inputs) == 0 {
 				return m, m.submit()
@@ -98,14 +119,54 @@ func (m PromptModel) Update(msg tea.Msg) (PromptModel, tea.Cmd) {
 	return m, nil
 }
 
+// cycleHistory fills the current input with the next history value.
+func (m *PromptModel) cycleHistory() {
+	if m.cursor >= len(m.command.Prompts) {
+		return
+	}
+	p := m.command.Prompts[m.cursor]
+	histKey := m.command.Name + "/" + p.Key
+	vals, ok := m.history[histKey]
+	if !ok || len(vals) == 0 {
+		return
+	}
+
+	current := m.inputs[m.cursor].Value()
+
+	// Find current value in history, pick next.
+	nextIdx := 0
+	for i, v := range vals {
+		if v == current {
+			nextIdx = (i + 1) % len(vals)
+			break
+		}
+	}
+
+	m.inputs[m.cursor].SetValue(vals[nextIdx])
+}
+
 func (m PromptModel) submit() tea.Cmd {
 	inputs := make(map[string]string)
+	var cmds []tea.Cmd
+
 	for i, p := range m.command.Prompts {
-		inputs[p.Key] = strings.TrimSpace(m.inputs[i].Value())
+		val := strings.TrimSpace(m.inputs[i].Value())
+		inputs[p.Key] = val
+
+		if val != "" {
+			cat := m.command.Name + "/" + p.Key
+			v := val
+			cmds = append(cmds, func() tea.Msg {
+				return SaveHistoryMsg{Category: cat, Value: v}
+			})
+		}
 	}
-	return func() tea.Msg {
+
+	cmds = append(cmds, func() tea.Msg {
 		return PromptDoneMsg{Inputs: inputs}
-	}
+	})
+
+	return tea.Batch(cmds...)
 }
 
 func (m PromptModel) View() string {
@@ -131,6 +192,7 @@ func (m PromptModel) View() string {
 	b.WriteString(curd.RenderHintBar(st, []curd.Hint{
 		{Key: "tab/↓", Desc: "next"},
 		{Key: "shift+tab/↑", Desc: "prev"},
+		{Key: "ctrl+p", Desc: "history"},
 		{Key: "enter", Desc: "submit"},
 		{Key: "esc", Desc: "back"},
 	}))
