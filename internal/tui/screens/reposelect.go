@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/CheeziCrew/raclette/internal/ops"
 	"github.com/CheeziCrew/curd"
+	"github.com/CheeziCrew/raclette/internal/ops"
 )
 
 // Re-export for backward compat.

@@ -1,8 +1,8 @@
 package screens
 
 import (
-	"github.com/CheeziCrew/raclette/internal/maven"
 	"github.com/CheeziCrew/curd"
+	"github.com/CheeziCrew/raclette/internal/maven"
 )
 
 // MenuModel wraps curd.MenuModel for raclette.

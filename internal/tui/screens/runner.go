@@ -16,9 +16,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/CheeziCrew/curd"
 	"github.com/CheeziCrew/raclette/internal/maven"
 	"github.com/CheeziCrew/raclette/internal/ops"
-	"github.com/CheeziCrew/curd"
 )
 
 // Re-export task types from curd.
@@ -130,7 +130,6 @@ func (m *RunnerModel) StartText(cmd maven.Command) {
 	m.elapsed = 0
 	m.viewport.SetContent("")
 }
-
 
 func (m RunnerModel) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, tickCmd())
@@ -672,4 +671,3 @@ func writeLog(repo, stdout, stderr string) {
 	}
 	os.WriteFile(filepath.Join(logDir, repo+".log"), []byte(buf.String()), 0644)
 }
-

@@ -11,12 +11,12 @@ import (
 // ── XML structs for pom.xml parsing ─────────────────────────────────
 
 type pomProject struct {
-	XMLName    xml.Name   `xml:"project"`
-	Parent     pomParent  `xml:"parent"`
-	GroupID    string     `xml:"groupId"`
+	XMLName    xml.Name  `xml:"project"`
+	Parent     pomParent `xml:"parent"`
+	GroupID    string    `xml:"groupId"`
 	ArtifactID string    `xml:"artifactId"`
-	Version    string     `xml:"version"`
-	Build      *pomBuild  `xml:"build"`
+	Version    string    `xml:"version"`
+	Build      *pomBuild `xml:"build"`
 }
 
 type pomParent struct {

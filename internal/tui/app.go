@@ -6,10 +6,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/CheeziCrew/curd"
 	"github.com/CheeziCrew/raclette/internal/maven"
 	"github.com/CheeziCrew/raclette/internal/ops"
 	"github.com/CheeziCrew/raclette/internal/tui/screens"
-	"github.com/CheeziCrew/curd"
 )
 
 const maxParallel = 3

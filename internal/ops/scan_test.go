@@ -24,7 +24,7 @@ func TestParsePomProperties(t *testing.T) {
 </project>`,
 			want: map[string]string{
 				"spring.version": "6.0.0",
-				"java.version":  "17",
+				"java.version":   "17",
 			},
 		},
 		{

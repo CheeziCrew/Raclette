@@ -13,11 +13,11 @@ import (
 
 // DepMatch represents a dependency match in a repo.
 type DepMatch struct {
-	Repo      string
-	GroupID   string
-	Artifact  string
-	Version   string
-	InParent  bool
+	Repo     string
+	GroupID  string
+	Artifact string
+	Version  string
+	InParent bool
 }
 
 // FindDependency scans pom.xml files across repos for a dependency matching the query.

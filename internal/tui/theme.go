@@ -33,14 +33,14 @@ var (
 
 // Backward-compat style aliases.
 var (
-	titleStyle    = Styles.Title
-	subtitleStyle = Styles.Subtitle
-	selectedStyle = Styles.Selected
-	dimStyle      = Styles.Dim
-	successStyle  = Styles.SuccessStyle
-	errorStyle    = Styles.FailStyle
-	warnStyle     = lipgloss.NewStyle().Foreground(curd.ColorBrYellow)
-	boxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(curd.ColorYellow).Padding(0, 2)
+	titleStyle     = Styles.Title
+	subtitleStyle  = Styles.Subtitle
+	selectedStyle  = Styles.Selected
+	dimStyle       = Styles.Dim
+	successStyle   = Styles.SuccessStyle
+	errorStyle     = Styles.FailStyle
+	warnStyle      = lipgloss.NewStyle().Foreground(curd.ColorBrYellow)
+	boxStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(curd.ColorYellow).Padding(0, 2)
 	activeBoxStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(curd.ColorBrYellow).Padding(0, 2)
-	helpStyle     = Styles.HelpMargin
+	helpStyle      = Styles.HelpMargin
 )
