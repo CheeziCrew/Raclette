@@ -1,10 +1,10 @@
 module github.com/CheeziCrew/raclette
 
-go 1.25.0
+go 1.26.0
 
 require (
 	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.0.9
+	charm.land/bubbletea/v2 v2.0.10
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/CheeziCrew/curd v0.2.23
 	github.com/spf13/cobra v1.10.2
